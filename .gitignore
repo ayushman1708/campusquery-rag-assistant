@@ -1,0 +1,25 @@
+# Python virtual environments
+.venv/
+venv/
+
+# Environment variables and secrets
+.env
+
+# Python cache and test files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# IDE and operating system files
+.vscode/
+.DS_Store
+
+# Local university documents and generated data
+*.pdf
+data/raw/
+data/processed/
+uploads/
+
+# Logs
+*.log
