@@ -6,6 +6,8 @@ from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel
 
+from app.services.pdf_extractor import extract_pages
+
 app = FastAPI(
     title="CampusQuery API",
     description="Citation-grounded university knowledge assistant",
@@ -28,6 +30,13 @@ class DocumentUploadResponse(BaseModel):
     file_size: int
     uploaded_at: str
     file_path: str
+
+
+class PageExtractionResponse(BaseModel):
+    document_id: str
+    filename: str
+    total_pages: int
+    pages: list[dict]
 
 
 @app.get("/", tags=["System"])
@@ -87,4 +96,34 @@ async def upload_document(
         file_size=file_size,
         uploaded_at=datetime.utcnow().isoformat(),
         file_path=str(file_path),
+    )
+
+
+@app.post("/extract", response_model=PageExtractionResponse, tags=["Documents"])
+async def extract_document(
+    document_id: str = File(..., description="Document ID from /upload response"),
+):
+    # Find file by document_id
+    file_path = None
+    filename = None
+    for file in UPLOAD_DIR.glob("*.pdf"):
+        if file.stem == document_id:
+            file_path = file
+            filename = file.name
+            break
+
+    if file_path is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Document with ID {document_id} not found",
+        )
+
+    # Extract pages
+    pages = extract_pages(file_path)
+
+    return PageExtractionResponse(
+        document_id=document_id,
+        filename=filename,
+        total_pages=len(pages),
+        pages=pages,
     )
