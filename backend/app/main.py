@@ -3,10 +3,11 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from pydantic import BaseModel
 
 from app.services.pdf_extractor import extract_pages
+from app.services.text_chunker import chunk_pages_with_metadata
 
 app = FastAPI(
     title="CampusQuery API",
@@ -17,6 +18,9 @@ app = FastAPI(
 UPLOAD_DIR = Path(__file__).resolve().parent.parent / "data" / "uploads"
 ALLOWED_EXTENSIONS = {".pdf"}
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+
+DEFAULT_CHUNK_SIZE = 500
+DEFAULT_OVERLAP = 50
 
 
 class HealthResponse(BaseModel):
@@ -39,6 +43,13 @@ class PageExtractionResponse(BaseModel):
     pages: list[dict]
 
 
+class ChunkingResponse(BaseModel):
+    document_id: str
+    filename: str
+    total_chunks: int
+    chunks: list[dict]
+
+
 @app.get("/", tags=["System"])
 async def root():
     return {
@@ -59,7 +70,6 @@ async def health_check():
 async def upload_document(
     file: UploadFile = File(..., description="PDF document to upload"),
 ):
-    # Validate file extension
     file_ext = Path(file.filename).suffix.lower()
     if file_ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
@@ -67,26 +77,21 @@ async def upload_document(
             detail=f"Only PDF files are allowed. Received extension: {file_ext}",
         )
 
-    # Read file content
     content = await file.read()
     file_size = len(content)
 
-    # Validate file size
     if file_size > MAX_FILE_SIZE:
         raise HTTPException(
             status_code=400,
             detail=f"File too large. Max size: {MAX_FILE_SIZE} bytes, received: {file_size} bytes",
         )
 
-    # Generate unique document ID
     document_id = str(uuid.uuid4())
     safe_filename = f"{document_id}{file_ext}"
     file_path = UPLOAD_DIR / safe_filename
 
-    # Ensure upload directory exists
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Save file
     with open(file_path, "wb") as f:
         f.write(content)
 
@@ -103,7 +108,6 @@ async def upload_document(
 async def extract_document(
     document_id: str = File(..., description="Document ID from /upload response"),
 ):
-    # Find file by document_id
     file_path = None
     filename = None
     for file in UPLOAD_DIR.glob("*.pdf"):
@@ -118,7 +122,6 @@ async def extract_document(
             detail=f"Document with ID {document_id} not found",
         )
 
-    # Extract pages
     pages = extract_pages(file_path)
 
     return PageExtractionResponse(
@@ -126,4 +129,51 @@ async def extract_document(
         filename=filename,
         total_pages=len(pages),
         pages=pages,
+    )
+
+
+@app.post("/chunk", response_model=ChunkingResponse, tags=["Documents"])
+async def chunk_document(
+    document_id: str = File(..., description="Document ID from /upload response"),
+    chunk_size: int = Form(
+        default=DEFAULT_CHUNK_SIZE,
+        ge=100,
+        le=2000,
+        description="Chunk size in characters",
+    ),
+    overlap: int = Form(
+        default=DEFAULT_OVERLAP,
+        ge=0,
+        le=500,
+        description="Overlap in characters",
+    ),
+):
+    file_path = None
+    filename = None
+    for file in UPLOAD_DIR.glob("*.pdf"):
+        if file.stem == document_id:
+            file_path = file
+            filename = file.name
+            break
+
+    if file_path is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Document with ID {document_id} not found",
+        )
+
+    pages = extract_pages(file_path)
+    chunks = chunk_pages_with_metadata(
+        pages,
+        document_id,
+        filename,
+        chunk_size,
+        overlap,
+    )
+
+    return ChunkingResponse(
+        document_id=document_id,
+        filename=filename,
+        total_chunks=len(chunks),
+        chunks=chunks,
     )
