@@ -8,6 +8,8 @@ from pydantic import BaseModel
 
 from app.services.pdf_extractor import extract_pages
 from app.services.text_chunker import chunk_pages_with_metadata
+from app.services.database import init_db, insert_chunks
+from app.services.embeddings import generate_embedding
 
 app = FastAPI(
     title="CampusQuery API",
@@ -177,3 +179,54 @@ async def chunk_document(
         total_chunks=len(chunks),
         chunks=chunks,
     )
+@app.post("/embed-and-store", tags=["Documents"])
+async def embed_and_store(
+    document_id: str = File(..., description="Document ID from /upload response"),
+    chunk_size: int = Form(default=500, ge=100, le=2000),
+    overlap: int = Form(default=50, ge=0, le=500),
+):
+    # Initialize database (first time only)
+    init_db()
+
+    # Find file
+    file_path = None
+    filename = None
+    for file in UPLOAD_DIR.glob("*.pdf"):
+        if file.stem == document_id:
+            file_path = file
+            filename = file.name
+            break
+
+    if file_path is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Document with ID {document_id} not found",
+        )
+
+    # Extract and chunk
+    pages = extract_pages(file_path)
+    chunks = chunk_pages_with_metadata(
+        pages,
+        document_id,
+        filename,
+        chunk_size,
+        overlap,
+    )
+
+    # Generate embeddings
+    chunks_with_embeddings = []
+    for chunk in chunks:
+        embedding = generate_embedding(chunk["chunk_text"])
+        chunk_with_embedding = {**chunk, "embedding": embedding}
+        chunks_with_embeddings.append(chunk_with_embedding)
+
+    # Store in database
+    insert_chunks(chunks_with_embeddings)
+
+    return {
+        "document_id": document_id,
+        "filename": filename,
+        "total_chunks_stored": len(chunks_with_embeddings),
+        "embedding_model": "all-MiniLM-L6-v2",
+        "embedding_dimension": 384,
+    }
