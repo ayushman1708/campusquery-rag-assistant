@@ -10,6 +10,7 @@ from app.services.pdf_extractor import extract_pages
 from app.services.text_chunker import chunk_pages_with_metadata
 from app.services.database import init_db, insert_chunks
 from app.services.embeddings import generate_embedding
+from app.services.retrieval import search_chunks
 
 app = FastAPI(
     title="CampusQuery API",
@@ -229,4 +230,24 @@ async def embed_and_store(
         "total_chunks_stored": len(chunks_with_embeddings),
         "embedding_model": "all-MiniLM-L6-v2",
         "embedding_dimension": 384,
+    }
+@app.post("/query", tags=["Query"])
+async def query(
+    question: str = Form(..., description="User question"),
+    top_k: int = Form(default=5, ge=1, le=20, description="Number of chunks to retrieve"),
+):
+    # Search for relevant chunks
+    results = search_chunks(question, top_k)
+
+    if not results:
+        return {
+            "question": question,
+            "chunks": [],
+            "message": "No relevant chunks found. Upload documents first.",
+        }
+
+    return {
+        "question": question,
+        "chunks": results,
+        "total_chunks": len(results),
     }
